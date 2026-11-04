@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>우리말 행맨</title>
+<style>
+  :root {
+    --bg: #f6f3ec; --card: #fffdf8; --ink: #22201c; --muted: #8a857b;
+    --line: #cfc8b8; --ok: #2f8a4f; --bad: #c0392b; --used: #b4afa5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+    display: flex; justify-content: center;
+  }
+  main {
+    width: 100%; max-width: 760px; padding: 20px 12px 32px;
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+  }
+
+  /* 맨 위: 제목, 분류 힌트, 남은 기회 */
+  header {
+    width: 100%; display: flex; flex-wrap: wrap; align-items: center;
+    justify-content: space-between; gap: 8px 16px;
+  }
+  h1 { margin: 0; font-size: 1.6rem; letter-spacing: .04em; }
+  .info { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; }
+  .hint { color: var(--muted); }
+  .hint b { color: var(--ink); }
+  .lives { font-size: 1.1rem; letter-spacing: .12em; }
+
+  /* 행맨 그림: 틀리기 전에는 각 부분을 숨겨 둠 */
+  svg { width: 200px; height: 200px; }
+  svg .part { stroke: var(--ink); stroke-width: 4; stroke-linecap: round; fill: none; visibility: hidden; }
+  svg .part.on { visibility: visible; }
+
+  /* 글자판: 글자 하나 = 낱자 칸 2~3개 + 밑줄 */
+  .board { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px 20px; }
+  .syl { display: flex; gap: 4px; padding-bottom: 6px; border-bottom: 3px solid var(--line); }
+  .syl.done { border-bottom-color: var(--ok); }
+  .cell {
+    width: 2.3rem; height: 2.7rem; display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem; font-weight: 600; border: 2px dashed var(--line); border-radius: 6px;
+  }
+  .cell.shown, .cell.missed { border-color: transparent; }
+  .cell.missed { color: var(--bad); }
+
+  /* 안내 문구 */
+  .msg { min-height: 1.5em; font-weight: 600; text-align: center; }
+  .msg.win { color: var(--ok); }
+  .msg.lose { color: var(--bad); }
+
+  /* 화면 자판 5줄 */
+  .keys { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+  .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }
+  .key {
+    min-width: 2.4rem; height: 2.6rem; padding: 0; font: inherit; font-size: 1.15rem;
+    color: var(--ink); background: var(--card); border: 1px solid var(--line);
+    border-radius: 6px; cursor: pointer;
+  }
+  .key:hover:not(:disabled) { background: #eee7d8; }
+  .key.hit  { background: var(--ok);   border-color: var(--ok);   color: #fff; }
+  .key.miss { background: var(--used); border-color: var(--used); color: #fff; }
+  .key:disabled { cursor: default; }
+  .locked .key:not(.hit):not(.miss) { opacity: .4; }
+
+  #next {
+    font: inherit; font-size: 1rem; font-weight: 600; padding: 10px 26px;
+    border: none; border-radius: 8px; background: var(--ink); color: var(--bg); cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>우리말 행맨</h1>
+    <div class="info">
+      <span class="hint">분류: <b id="category"></b></span>
+      <span class="lives" id="lives" title="남은 기회"></span>
+    </div>
+  </header>
+
+  <!-- 행맨 그림. 순서: 교수대 → 머리 → 몸통 → 왼팔 → 오른팔 → 왼다리 → 오른다리 -->
+  <svg viewBox="0 0 200 220" aria-label="행맨 그림">
+    <path class="part" d="M20 210 H120 M50 210 V20 H140 V45" />
+    <circle class="part" cx="140" cy="62" r="17" />
+    <path class="part" d="M140 79 V140" />
+    <path class="part" d="M140 95 L115 122" />
+    <path class="part" d="M140 95 L165 122" />
+    <path class="part" d="M140 140 L118 182" />
+    <path class="part" d="M140 140 L162 182" />
+  </svg>
+
+  <div class="board" id="board"></div>
+  <div class="msg" id="msg"></div>
+  <div class="keys" id="keys"></div>
+  <button id="next" type="button">새 단어</button>
+</main>
+
+<script>
+// ───────── 1. 자료 ─────────
+
+// 단어 목록 (CSV에서 자동으로 옮김). 분류마다 단어를 띄어쓰기로 구분.
+const WORD_LIST = {
+  "동물": "고양이 강아지 호랑이 사자 코끼리 기린 원숭이 토끼 거북이 다람쥐 고슴도치 너구리 여우 늑대 판다 캥거루 하마 코뿔소 얼룩말 낙타 사슴 노루 멧돼지 돼지 염소 오리 거위 참새 비둘기 까치 까마귀 독수리 부엉이 올빼미 앵무새 펭귄 갈매기 백조 두루미 공작 고래 돌고래 상어 문어 오징어 낙지 꽃게 새우 가재 해파리 불가사리 조개 개구리 두꺼비 도롱뇽 악어 도마뱀 나비 잠자리 매미 메뚜기 개미 꿀벌 모기 파리 반딧불이 달팽이 지렁이 거미 박쥐 수달 족제비 두더지 햄스터 고릴라 치타 표범 하이에나 물개 바다표범 해마",
+  "음식": "김치찌개 된장찌개 비빔밥 불고기 떡볶이 김밥 라면 냉면 짜장면 짬뽕 탕수육 삼겹살 갈비탕 설렁탕 삼계탕 순대 어묵 만두 칼국수 수제비 잡채 떡국 미역국 콩나물 시금치 김치 깍두기 계란말이 달걀 두부 감자탕 닭갈비 족발 보쌈 해장국 부대찌개 호떡 붕어빵 팥빙수 약과 송편 식혜 수정과 막걸리 아이스크림 초콜릿 사탕 과자 케이크 쿠키 도넛 샌드위치 햄버거 피자 스파게티 카레 돈가스 초밥 우동 볶음밥 오므라이스 샐러드 수박 참외 딸기 포도 복숭아 사과 바나나 오렌지 레몬 자두 앵두 체리 망고 파인애플 키위 토마토 오이 당근 양파 마늘 생강 고추 호박 가지 배추 감자 고구마 옥수수 버섯 땅콩 호두 대추",
+  "물건": "연필 지우개 공책 가위 볼펜 필통 책가방 우산 안경 시계 거울 빗자루 걸레 휴지 수건 비누 칫솔 치약 냉장고 세탁기 청소기 선풍기 에어컨 전자레인지 텔레비전 컴퓨터 노트북 키보드 마우스 휴대폰 이어폰 충전기 전등 촛불 성냥 라이터 열쇠 자물쇠 지갑 동전 반지 목걸이 귀걸이 팔찌 모자 장갑 목도리 양말 신발 운동화 구두 장화 슬리퍼 바지 치마 셔츠 외투 잠옷 이불 베개 침대 의자 책상 소파 옷장 서랍 창문 커튼 액자 화분 꽃병 주전자 냄비 프라이팬 국자 숟가락 젓가락 포크 접시 그릇 쟁반 도마 망치 드라이버 사다리 손전등 풍선 인형 장난감 팽이 구슬 주사위 퍼즐",
+  "탈것": "자전거 자동차 비행기 기차 지하철 버스 택시 오토바이 헬리콥터 잠수함 로켓 유람선 트럭 구급차 소방차 경찰차 열기구 돛단배 썰매 유모차 킥보드 케이블카 엘리베이터",
+  "자연": "하늘 구름 무지개 번개 천둥 소나기 태풍 눈사람 고드름 이슬 안개 바람 햇빛 달빛 별빛 노을 새벽 아침 저녁 한밤중 바다 파도 모래 해변 언덕 계곡 폭포 시냇물 강물 호수 연못 동굴 사막 화산 빙하 나무 나뭇잎 꽃잎 소나무 대나무 은행나무 단풍 벚꽃 진달래 개나리 해바라기 민들레 장미 튤립 무궁화 코스모스 국화 백합 연꽃 선인장 이끼 잔디 흙먼지 흙탕물 조약돌 바위 지구 태양 은하수 우주 혜성 유성",
+  "사람": "선생님 의사 간호사 경찰관 소방관 요리사 미용사 가수 배우 화가 작가 기자 군인 농부 어부 목수 변호사 판사 과학자 우주인 운동선수 축구선수 운전기사 우체부 사진가 건축가 약사 은행원 회사원 학생 할머니 할아버지 아버지 어머니 형제 자매 친구 이웃 아기 어린이 청소년",
+  "장소": "학교 병원 약국 은행 우체국 도서관 박물관 미술관 극장 영화관 놀이공원 동물원 식물원 수족관 공원 놀이터 시장 백화점 편의점 빵집 꽃집 서점 문구점 미용실 세탁소 목욕탕 경찰서 소방서 시청 공항 항구 기차역 정류장 주차장 운동장 수영장 체육관 교실 부엌 거실 화장실 다락방 지하실 옥상 마당 정원 농장 목장 등대 성당 교회 궁전",
+  "마음과 일상": "사랑 우정 행복 슬픔 기쁨 용기 희망 추억 비밀 약속 거짓말 수수께끼 이야기 노래 그림 웃음 눈물 생일 선물 편지 소풍 여행 방학 숙제 시험 운동 낮잠 값어치 넋두리 맑음 여덟 넓이 굵기"
+};
+
+// 한글 낱자 표. 컴퓨터 안의 글자 번호 순서 그대로입니다.
+const CHO  = [...'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'];                 // 초성 19
+const JUNG = [...'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ'];             // 중성 21
+const JONG = ['', ...'ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ']; // 받침 없음 + 종성 27
+
+// 화면 자판 5줄
+const KEY_ROWS = [
+  'ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ', // 자음 14
+  'ㄲㄸㅃㅆㅉ',                   // 쌍자음 5
+  'ㄳㄵㄶㄺㄻㄼㄽㄾㄿㅀㅄ',       // 겹받침 11
+  'ㅏㅑㅓㅕㅗㅛㅜㅠㅡㅣ',         // 모음 10
+  'ㅐㅒㅔㅖㅘㅙㅚㅝㅞㅟㅢ',       // 겹모음 11
+];
+
+// 실제 키보드의 키 자리 → 두벌식 낱자. [그냥 누를 때, Shift와 함께 누를 때]
+// 키 '자리'를 기준으로 하므로 한/영 상태와 상관없이 같은 낱자가 나옵니다.
+const PHYSICAL = {
+  KeyQ:['ㅂ','ㅃ'], KeyW:['ㅈ','ㅉ'], KeyE:['ㄷ','ㄸ'], KeyR:['ㄱ','ㄲ'], KeyT:['ㅅ','ㅆ'],
+  KeyY:['ㅛ','ㅛ'], KeyU:['ㅕ','ㅕ'], KeyI:['ㅑ','ㅑ'], KeyO:['ㅐ','ㅒ'], KeyP:['ㅔ','ㅖ'],
+  KeyA:['ㅁ','ㅁ'], KeyS:['ㄴ','ㄴ'], KeyD:['ㅇ','ㅇ'], KeyF:['ㄹ','ㄹ'], KeyG:['ㅎ','ㅎ'],
+  KeyH:['ㅗ','ㅗ'], KeyJ:['ㅓ','ㅓ'], KeyK:['ㅏ','ㅏ'], KeyL:['ㅣ','ㅣ'],
+  KeyZ:['ㅋ','ㅋ'], KeyX:['ㅌ','ㅌ'], KeyC:['ㅊ','ㅊ'], KeyV:['ㅍ','ㅍ'],
+  KeyB:['ㅠ','ㅠ'], KeyN:['ㅜ','ㅜ'], KeyM:['ㅡ','ㅡ'],
+};
+
+const MAX_WRONG = 7;
+
+// ───────── 2. 글자 쪼개기 ─────────
+
+// 완성된 글자 하나(예: '닭')를 낱자 배열(['ㄷ','ㅏ','ㄺ'])로 바꿉니다.
+// 한글 완성형 글자는 번호가 (초성×21 + 중성)×28 + 종성 규칙으로 매겨져 있어서
+// 그 번호를 거꾸로 나눠 세 자리를 알아냅니다.
+function splitSyllable(ch) {
+  const n = ch.charCodeAt(0) - 0xAC00;   // '가'를 0번으로 놓은 순번
+  const jong = n % 28;
+  const jung = Math.floor(n / 28) % 21;
+  const cho  = Math.floor(n / 28 / 21);
+  const parts = [CHO[cho], JUNG[jung]];
+  if (jong > 0) parts.push(JONG[jong]);  // 받침이 있을 때만 셋째 칸
+  return parts;
+}
+
+// ───────── 3. 단어 순서 (한 바퀴 돌기 전엔 반복 없음) ─────────
+
+// 분류별 문자열을 [분류, 단어] 짝의 목록으로 펼칩니다.
+const ALL_WORDS = Object.entries(WORD_LIST)
+  .flatMap(([category, words]) => words.split(' ').map(word => ({ category, word })));
+
+let deck = [];        // 아직 안 나온 단어들 (섞인 순서)
+let lastWord = null;
+
+function drawWord() {
+  if (deck.length === 0) {
+    deck = [...ALL_WORDS];
+    // 무작위로 섞기: 뒤에서부터 한 장씩, 앞쪽 아무 자리와 맞바꿈
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    // 새 바퀴의 첫 단어가 방금 나온 단어와 같으면 맨 뒤로 보냄
+    if (deck.length > 1 && deck[deck.length - 1].word === lastWord) deck.unshift(deck.pop());
+  }
+  const next = deck.pop();
+  lastWord = next.word;
+  return next;
+}
+
+// ───────── 4. 게임 상태 ─────────
+
+let current;          // { category, word }
+let syllables;        // 글자별 칸: [[{ jamo:'ㄷ', shown:false }, ...], ...]
+let tried;            // 이번 판에 이미 누른 낱자 모음
+let wrong;            // 틀린 횟수
+let over;             // 게임이 끝났는지
+
+const $ = id => document.getElementById(id);
+const keyButtons = {}; // 낱자 → 화면 자판 버튼
+
+function newGame() {
+  current = drawWord();
+  syllables = [...current.word].map(ch => splitSyllable(ch).map(jamo => ({ jamo, shown: false })));
+  tried = new Set();
+  wrong = 0;
+  over = false;
+  for (const btn of Object.values(keyButtons)) {
+    btn.className = 'key';
+    btn.disabled = false;
+  }
+  render();
+}
+
+// 낱자 하나를 골랐을 때
+function guess(jamo) {
+  if (over || tried.has(jamo)) return;   // 끝났거나 이미 누른 낱자면 무시
+  tried.add(jamo);
+
+  let found = false;
+  for (const syl of syllables) {
+    for (const cell of syl) {
+      if (cell.jamo === jamo) { cell.shown = true; found = true; } // 초성·중성·종성 어디든 모두 드러냄
+    }
+  }
+
+  const btn = keyButtons[jamo];
+  btn.disabled = true;
+  btn.classList.add(found ? 'hit' : 'miss');
+  if (!found) wrong++;
+
+  const allShown = syllables.every(syl => syl.every(cell => cell.shown));
+  if (allShown || wrong >= MAX_WRONG) over = true;
+  render();
+}
+
+// ───────── 5. 화면 그리기 ─────────
+
+function render() {
+  const won = over && wrong < MAX_WRONG;
+  const lost = over && !won;
+
+  $('category').textContent = current.category;
+  $('lives').textContent = '●'.repeat(MAX_WRONG - wrong) + '○'.repeat(wrong);
+
+  // 그림: 틀린 횟수만큼 앞에서부터 보이기
+  document.querySelectorAll('svg .part').forEach((part, i) => part.classList.toggle('on', i < wrong));
+
+  // 글자판
+  const board = $('board');
+  board.innerHTML = '';
+  for (const syl of syllables) {
+    const box = document.createElement('div');
+    box.className = 'syl' + (syl.every(c => c.shown) ? ' done' : '');
+    for (const cell of syl) {
+      const el = document.createElement('div');
+      if (cell.shown) { el.className = 'cell shown'; el.textContent = cell.jamo; }
+      else if (lost)  { el.className = 'cell missed'; el.textContent = cell.jamo; } // 졌을 때 못 맞힌 낱자
+      else            { el.className = 'cell'; }
+      box.appendChild(el);
+    }
+    board.appendChild(box);
+  }
+
+  // 안내 문구
+  const msg = $('msg');
+  msg.className = 'msg' + (won ? ' win' : lost ? ' lose' : '');
+  msg.textContent = won ? `맞혔습니다! 정답: ${current.word}`
+                  : lost ? `아쉬워요. 정답: ${current.word}`
+                  : '';
+
+  // 끝나면 자판 잠그기 + 버튼 글자 바꾸기
+  $('keys').classList.toggle('locked', over);
+  if (over) for (const btn of Object.values(keyButtons)) btn.disabled = true;
+  $('next').textContent = over ? '다음 단어' : '새 단어';
+}
+
+// ───────── 6. 입력 연결 ─────────
+
+// 화면 자판 만들기
+for (const row of KEY_ROWS) {
+  const rowEl = document.createElement('div');
+  rowEl.className = 'row';
+  for (const jamo of row) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'key';
+    btn.textContent = jamo;
+    btn.addEventListener('click', () => { btn.blur(); guess(jamo); });
+    keyButtons[jamo] = btn;
+    rowEl.appendChild(btn);
+  }
+  $('keys').appendChild(rowEl);
+}
+
+$('next').addEventListener('click', e => { e.currentTarget.blur(); newGame(); });
+
+// 실제 키보드
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;  // 복사·새로고침 같은 단축키는 건드리지 않음
+  if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+    e.preventDefault();
+    if (over) newGame();                           // 끝난 뒤에만 다음 단어로
+    return;
+  }
+  const pair = PHYSICAL[e.code];
+  if (!pair) return;
+  e.preventDefault();
+  guess(e.shiftKey ? pair[1] : pair[0]);
+});
+
+newGame();
+</script>
+</body>
+</html>
